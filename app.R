@@ -1,0 +1,131 @@
+library(shiny)
+library(shinydashboard) 
+library(leaflet)
+library(DT)
+library(plotly)
+library(tidyverse)
+library(dashboardthemes)
+library(ggthemes)
+library(shinyWidgets)
+
+
+ui <- dashboardPage(#skin = "yellow",
+    dashboardHeader(title = "BPD Arrest"),
+    dashboardSidebar(
+        sidebarMenu(
+            menuItem("Plotly", tabName = "page1", icon = icon("line-chart")),
+            menuItem("Density", tabName = "page2", icon = icon("area-chart")),
+            menuItem("Map", tabName = "page3", icon = icon("map-o")),
+            menuItem("Data", tabName = "page4", icon = icon("cat"))
+        )
+    ),
+    dashboardBody(
+        #shinyDashboardThemes(theme = "grey_dark"),
+      #setBackgroundImage(src = "www/pokemon.jpg"),
+        tabItems(
+            tabItem(tabName = "page1",
+                    checkboxInput("holiday", label = "Show holidays", value = FALSE),
+                    plotlyOutput("plot2", height = 500)
+                    ),
+            tabItem(tabName = "page2",
+                    sliderInput("year", "Year:", min = 2014, max = 2020, value = 1, 
+                                step = 1, animate = animationOptions(interval = 2000, loop = FALSE)),
+                    plotOutput("plot1")
+                    ),
+            tabItem(tabName = "page3",
+                    leafletOutput("myMap", width="100%")
+                    ),
+            tabItem(tabName = "page4",
+                    dataTableOutput("myTable")
+            )
+        )
+    )
+)
+
+
+server <- function(input, output, session) {
+
+  data<-read_csv("data.csv")
+  data$ArrestDate=as.Date(data$ArrestDate,"%m/%d/%Y")
+  
+  
+  holidays<-read_csv("usholidays.csv")
+  holidays<-holidays[-1]
+  holidays$Date=as.Date(holidays$Date,"%Y-%m-%d")
+  
+  words=unique(holidays$Holiday)
+  Abb=c("NYD","MLKB","WaB", "MeD", "InD", "LaD", "CoD", "VeD", "ThD", "ChD", "NYD","MLKB","WaB")
+  holidays$Abb=holidays$Holiday
+  for (i in 1:length(words)) {
+    holidays$Abb=str_replace(holidays$Abb,words[i],Abb[i])
+  
+  num_crime<-data %>% 
+    group_by(ArrestDate) %>% 
+    summarise(count=n())
+    
+  data_hol<-full_join(num_crime,holidays,by = c("ArrestDate" = "Date"))
+  
+  }
+  
+    output$plot1 = renderPlot({
+      return(data %>% 
+        filter(as.numeric(format(ArrestDate,'%Y')) == input$year) %>% 
+        ggplot(aes(x=Age,color=Sex)) + 
+        geom_density(size=1.5,bw=2) +
+        annotate("text", x = 60, y = 0.03, label = input$year,size=20,alpha = .2) +
+        labs(title="Distribution of crimes reported over two main gender") +
+        xlab("Age")+
+        ylab("Density") +
+        xlim(15,70)+
+        ylim(0,0.05) +
+        scale_color_discrete(name="Gender",labels = c("Female", "Male"),) +
+        theme(axis.text.y=element_blank(), axis.ticks.y = element_blank(),
+              panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+              panel.background = element_blank()))
+    })
+    
+    output$plot2 = renderPlotly({
+      f<-data_hol %>% 
+        filter(ArrestDate>="2014-01-01" & ArrestDate<="2020-04-30") %>% 
+        ggplot(aes(x=ArrestDate,y=count))+
+        geom_line()+
+        geom_smooth()+
+        labs(title="Arrests in Baltimore")+
+        xlab("Date")+
+        ylab("Number of arrests")
+      
+      if(input$holiday==TRUE){
+        data_subset = data_hol %>% 
+          filter(ArrestDate>="2014-01-01" & ArrestDate<="2020-04-30")%>% 
+          filter(!is.na(Holiday))
+        
+        f=f+geom_point(data = data_subset, color="purple")+
+          geom_text(data = data_subset, aes(x=ArrestDate, y=count, label=Abb))
+      }
+      
+      f=ggplotly(f)
+      return(f)
+    })
+    
+    output$myMap = renderLeaflet({
+      loc_data= data %>%
+        group_by(lng=round(Longitude,3),lat=round(Latitude,3)) %>%
+        summarise(N=n())
+      loc_data=loc_data %>% 
+        mutate(latL=lat-0.0005, latH=lat+0.0005, lngL=lng-0.0005, lngH=lng+0.0005)
+      return(loc_data %>% leaflet() %>% addTiles() %>%
+               setView(-76.6,39.31, zoom=12) %>%
+               addProviderTiles(providers$Stamen.Toner, group = "Toner")%>%
+               addLayersControl(baseGroups = c("Toner", "OSM"),
+                                options = layersControlOptions(collapsed = FALSE)) %>% 
+               addRectangles(lng1=~lngL,lng2=~lngH,lat1=~latL,lat2=~latH,
+                             fillOpacity = ~N/150, opacity = 0, fillColor = "red", label = ~N))
+    })
+    
+    output$myTable = renderDataTable({
+      return(datatable(data, rownames= FALSE))
+    })
+
+}
+
+shinyApp(ui = ui, server = server)
